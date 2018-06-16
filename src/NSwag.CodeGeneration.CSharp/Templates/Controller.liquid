@@ -25,7 +25,11 @@ public interface I{{ Class }}Controller
 {% endif -%}
 [System.CodeDom.Compiler.GeneratedCode("NSwag", "{{ ToolchainVersion }}")]
 {% if HasBasePath -%}
+{% if GenerateAspNetCore -%}
+[{{ AspNetNamespace }}.Route("{{ BasePath }}")]
+{% else -%}
 [{{ AspNetNamespace }}.RoutePrefix("{{ BasePath }}")]
+{% endif -%}
 {% endif -%}
 {% if GeneratePartialControllers -%}
 public partial class {{ Class }}Controller : {% if HasBaseClass %}{{ BaseClass }}{% else %}{{ AspNetNamespace }}.ApiController{% endif %}
@@ -36,6 +40,22 @@ public partial class {{ Class }}Controller : {% if HasBaseClass %}{{ BaseClass }
     {
         _implementation = implementation;
     }
+
+{% if GenerateAspNetCore -%}
+	private Microsoft.AspNetCore.Mvc.IActionResult HandleInvalidModelState(Microsoft.AspNetCore.Mvc.ModelBinding.ModelStateDictionary model)
+    {
+        var errors = "";
+        foreach (var state in ModelState)
+        {
+            foreach (var error in state.Value.Errors)
+            {
+                errors += error.ErrorMessage + "; ";
+            }
+        }
+        var authResponse = new { Status = new { Success = false, Result = errors.TrimEnd(new[] { ';', ' ' }) } };
+        return new Microsoft.AspNetCore.Mvc.ObjectResult(authResponse) { StatusCode = 404 };
+    }
+{% endif -%}
 
 {%     for operation in Operations -%}
 {%         if operation.HasSummary -%}
@@ -52,12 +72,31 @@ public partial class {{ Class }}Controller : {% if HasBaseClass %}{{ BaseClass }
 {%         if operation.IsDeprecated -%}
     [System.Obsolete]
 {%         endif -%}
+{%         if operation.HasSummary -%}
+{%		      if operation.AuthenticationAttribute != "" -%}
+	{{ operation.AuthenticationAttribute }}
+{%		      endif -%}
+{%			  if operation.AuthorizationAttribute != "" -%}
+	{{ operation.AuthorizationAttribute }}
+{%			  endif -%}
+{%         endif -%}
     [{{ AspNetNamespace }}.Http{{ operation.HttpMethodUpper }}, {{ AspNetNamespace }}.Route("{{ operation.Path }}")]
-    public {% if operation.WrapResponse %}async System.Threading.Tasks.Task<HttpResponseMessage>{% else %}{{ operation.ResultType }}{% endif %} {{ operation.ActualOperationName }}({% for parameter in operation.Parameters %}{% if parameter.IsBody %}[{{ AspNetNamespace }}.FromBody] {% endif %}{{ parameter.Type }} {{ parameter.VariableName }}{% if GenerateOptionalParameters and parameter.IsOptional %} = null{% endif %}{% if parameter.IsLast == false or UseCancellationToken %}, {% endif %}{% endfor %}{% if UseCancellationToken %}System.Threading.CancellationToken cancellationToken{% endif %})
+    public {% if operation.WrapResponse %}{% if GenerateAspNetCore %}async System.Threading.Tasks.Task<{{ AspNetNamespace }}.IActionResult>{% else %}async System.Threading.Tasks.Task<HttpResponseMessage>{% endif %}{% else %}{{ operation.ResultType }}{% endif %} {{ operation.ActualOperationName }}({% for parameter in operation.Parameters %}{% if parameter.IsBody %}[{{ AspNetNamespace }}.FromBody] {% endif %}{{ parameter.Type }} {{ parameter.VariableName }}{% if GenerateOptionalParameters and parameter.IsOptional %} = null{% endif %}{% if parameter.IsLast == false or UseCancellationToken %}, {% endif %}{% endfor %}{% if UseCancellationToken %}System.Threading.CancellationToken cancellationToken{% endif %})
     {
+{%      if operation.HttpMethodUpper == 'Post' -%}
+        if(!ModelState.IsValid) return HandleInvalidModelState(ModelState);
+{%      endif -%}
 {%         if operation.WrapResponse -%}
         var result = await _implementation.{{ operation.ActualOperationName }}Async({% for parameter in operation.Parameters %}{{ parameter.VariableName }}{% if parameter.IsLast == false or UseCancellationToken %}, {% endif %}{% endfor %}{% if UseCancellationToken %}cancellationToken{% endif %}).ConfigureAwait(false);
 
+{% if GenerateAspNetCore -%}
+		foreach (var header in result.Headers)
+			ControllerContext.HttpContext.Response.Headers.Add(header.Key, header.Value.ToArray());
+		if (result.StatusCode == 200)
+			return Ok(result.Result);
+		else
+			return new {{ AspNetNamespace }}.ObjectResult(result.Result) { StatusCode = result.StatusCode };
+{%         else -%}
         var status = (System.Net.HttpStatusCode)result.StatusCode;
         HttpResponseMessage response = Request.CreateResponse(status{% if operation.UnwrappedResultType != "void" %}, result.Result{% endif %});
 
@@ -65,6 +104,7 @@ public partial class {{ Class }}Controller : {% if HasBaseClass %}{{ BaseClass }
             response.Headers.Add(header.Key, header.Value);
 
         return response;
+{%         endif -%}
 {%         else -%}
         return _implementation.{{ operation.ActualOperationName }}Async({% for parameter in operation.Parameters %}{{ parameter.VariableName }}{% if parameter.HasDefault %} ?? {{parameter.Default}}{% endif %}{% if parameter.IsLast == false or UseCancellationToken %}, {% endif %}{% endfor %}{% if UseCancellationToken %}cancellationToken{% endif %});
 {%         endif -%}
